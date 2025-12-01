@@ -1,14 +1,19 @@
 import db from "../config/db.js";
 
-// Ambil semua produk
+// Ambil semua produk (hanya aktif)
 export async function getAllProducts() {
-  const [rows] = await db.execute("SELECT * FROM products ORDER BY id DESC");
+  const [rows] = await db.execute(
+    "SELECT * FROM products WHERE deleted_at IS NULL ORDER BY id DESC"
+  );
   return rows;
 }
 
-// Ambil produk berdasarkan ID
+// Ambil produk berdasarkan ID (hanya aktif)
 export async function getProductById(id) {
-  const [rows] = await db.execute("SELECT * FROM products WHERE id = ?", [id]);
+  const [rows] = await db.execute(
+    "SELECT * FROM products WHERE id = ? AND deleted_at IS NULL",
+    [id]
+  );
   return rows[0];
 }
 
@@ -23,11 +28,11 @@ export async function createProduct(product) {
     stock = 0,
     min_stock = 0,
     type = "barang",
-    satuan = "pcs",
-    satuan_dasar = "pcs",
-    konversi = {},
+    wholesale_price = null,
+    wholesale_min_qty = 0,
   } = product;
 
+  // Cek barcode unik
   if (barcode) {
     const [existing] = await db.execute(
       "SELECT id FROM products WHERE barcode = ? LIMIT 1",
@@ -40,8 +45,8 @@ export async function createProduct(product) {
 
   const [result] = await db.execute(
     `INSERT INTO products
-      (name, code, barcode, purchase_price, price, stock, min_stock, type, satuan, satuan_dasar, konversi, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      (name, code, barcode, purchase_price, price, stock, min_stock, type, wholesale_price, wholesale_min_qty, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
     [
       name,
       code,
@@ -51,17 +56,16 @@ export async function createProduct(product) {
       stock,
       min_stock,
       type,
-      satuan,
-      satuan_dasar,
-      JSON.stringify(konversi),
+      wholesale_price,
+      wholesale_min_qty,
     ]
   );
 
   return { id: result.insertId, ...product };
 }
 
-// Update produk
-export async function updateProduct(id, product) {
+// Update produk berdasarkan ID
+export async function updateProduct(id, updates) {
   const {
     name,
     code,
@@ -71,88 +75,105 @@ export async function updateProduct(id, product) {
     stock,
     min_stock,
     type,
-    satuan,
-    satuan_dasar,
-    konversi = {},
-  } = product;
+    wholesale_price,
+    wholesale_min_qty,
+    deleted_at,
+  } = updates;
 
-  const normalizedBarcode = barcode?.trim() || null;
+  const [existingProduct] = await db.execute(
+    "SELECT * FROM products WHERE id = ? LIMIT 1",
+    [id]
+  );
+  if (existingProduct.length === 0) throw new Error("Produk tidak ditemukan");
 
-  if (normalizedBarcode) {
-    const [existing] = await db.execute(
+  if (barcode) {
+    const [barcodeCheck] = await db.execute(
       "SELECT id FROM products WHERE barcode = ? AND id != ? LIMIT 1",
-      [normalizedBarcode, id]
+      [barcode, id]
     );
-    if (existing.length > 0) throw new Error("Barcode sudah digunakan");
+    if (barcodeCheck.length > 0) throw new Error("Barcode sudah digunakan");
   }
 
+  const fields = [];
+  const values = [];
+
+  if (name !== undefined) { fields.push("name = ?"); values.push(name); }
+  if (code !== undefined) { fields.push("code = ?"); values.push(code); }
+  if (barcode !== undefined) { fields.push("barcode = ?"); values.push(barcode?.trim() || null); }
+  if (purchase_price !== undefined) { fields.push("purchase_price = ?"); values.push(purchase_price); }
+  if (price !== undefined) { fields.push("price = ?"); values.push(price); }
+  if (stock !== undefined) { fields.push("stock = ?"); values.push(stock); }
+  if (min_stock !== undefined) { fields.push("min_stock = ?"); values.push(min_stock); }
+  if (type !== undefined) { fields.push("type = ?"); values.push(type); }
+  if (wholesale_price !== undefined) { fields.push("wholesale_price = ?"); values.push(wholesale_price); }
+  if (wholesale_min_qty !== undefined) { fields.push("wholesale_min_qty = ?"); values.push(wholesale_min_qty); }
+  if (deleted_at !== undefined) { fields.push("deleted_at = ?"); values.push(deleted_at); }
+
+  if (fields.length === 0) throw new Error("Tidak ada field untuk diupdate");
+
+  values.push(id);
+
+  const query = `UPDATE products SET ${fields.join(", ")} WHERE id = ?`;
+  await db.execute(query, values);
+
+  return { id, ...updates };
+}
+
+// Soft delete produk
+export async function softDeleteProduct(id) {
   const [result] = await db.execute(
-    `UPDATE products 
-     SET name=?, code=?, barcode=?, purchase_price=?, price=?, stock=?, min_stock=?, type=?, satuan=?, satuan_dasar=?, konversi=?
-     WHERE id=?`,
-    [
-      name,
-      code,
-      normalizedBarcode,
-      purchase_price,
-      price,
-      stock,
-      min_stock,
-      type,
-      satuan,
-      satuan_dasar,
-      JSON.stringify(konversi),
-      id,
-    ]
+    "UPDATE products SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL",
+    [id]
+  );
+  return result.affectedRows > 0;
+}
+
+// Ambil harga produk sesuai quantity
+export async function getProductPrice(productId, quantity = 1) {
+  const [rows] = await db.execute(
+    "SELECT id, name, price, wholesale_price, wholesale_min_qty FROM products WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+    [productId]
   );
 
-  return { affectedRows: result.affectedRows };
+  if (rows.length === 0) throw new Error("Produk tidak ditemukan atau sudah dihapus");
+
+  const product = rows[0];
+  let finalPrice = product.price;
+
+  if (product.wholesale_price !== null && quantity >= product.wholesale_min_qty) {
+    finalPrice = product.wholesale_price;
+  }
+
+  return {
+    id: product.id,
+    name: product.name,
+    quantity,
+    price: finalPrice,
+    total: finalPrice * quantity,
+  };
 }
 
-// Hapus produk
-export async function deleteProduct(id) {
-  const [result] = await db.execute("DELETE FROM products WHERE id = ?", [id]);
-  return { affectedRows: result.affectedRows };
-}
-
-// Tambah stok dengan konversi
-export async function addStock(productId, quantity, unit = null) {
+// Tambah stok
+export async function addStock(productId, quantity) {
   const product = await getProductById(productId);
   if (!product) return 0;
 
-  let realQuantity = quantity;
-
-  if (unit && unit !== product.satuan_dasar) {
-    const conv = JSON.parse(product.konversi || "{}");
-    if (!conv[unit]) throw new Error(`Unit "${unit}" tidak terdaftar`);
-    realQuantity = quantity * conv[unit];
-  }
-
   const [result] = await db.execute(
-    "UPDATE products SET stock = stock + ? WHERE id = ? AND type='barang'",
-    [realQuantity, productId]
+    "UPDATE products SET stock = stock + ? WHERE id = ?",
+    [quantity, productId]
   );
 
   return result.affectedRows;
 }
 
 // Kurangi stok
-export async function reduceStock(productId, quantity, unit = null) {
+export async function reduceStock(productId, quantity) {
   const product = await getProductById(productId);
-  if (!product) return 0;
-
-  let realQuantity = quantity;
-  if (unit && unit !== product.satuan_dasar) {
-    const conv = JSON.parse(product.konversi || "{}");
-    if (!conv[unit]) throw new Error(`Unit "${unit}" tidak terdaftar`);
-    realQuantity = quantity * conv[unit];
-  }
-
-  if (product.stock < realQuantity) return 0;
+  if (!product || product.stock < quantity) return 0;
 
   const [result] = await db.execute(
     "UPDATE products SET stock = stock - ? WHERE id = ?",
-    [realQuantity, productId]
+    [quantity, productId]
   );
 
   return result.affectedRows;
@@ -163,7 +184,7 @@ export async function getLowStockProducts() {
   const [rows] = await db.execute(
     `SELECT code, name, stock, min_stock, purchase_price
      FROM products
-     WHERE type='barang' AND stock <= min_stock
+     WHERE stock <= min_stock AND deleted_at IS NULL
      ORDER BY stock ASC`
   );
   return rows;
@@ -174,7 +195,7 @@ export async function searchProductByQuery(query) {
   const q = `%${query.toLowerCase()}%`;
   const [rows] = await db.query(
     `SELECT * FROM products
-     WHERE LOWER(name) LIKE ? OR LOWER(code) LIKE ? OR LOWER(barcode) LIKE ?
+     WHERE deleted_at IS NULL AND (LOWER(name) LIKE ? OR LOWER(code) LIKE ? OR LOWER(barcode) LIKE ?)
      LIMIT 10`,
     [q, q, q]
   );

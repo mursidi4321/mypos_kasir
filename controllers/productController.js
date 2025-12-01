@@ -3,13 +3,14 @@ import {
   getProductById,
   createProduct,
   updateProduct,
-  deleteProduct,
+  softDeleteProduct,
   getLowStockProducts,
   addStock,
   reduceStock,
   searchProductByQuery,
   getNextProductCodeFromDB,
   checkDuplicateBarcode,
+  getProductPrice,
 } from "../models/productModel.js";
 
 // GET /api/products
@@ -46,20 +47,19 @@ export async function addProduct(req, res) {
 // PUT /api/products/:id
 export async function editProduct(req, res) {
   try {
-    const result = await updateProduct(req.params.id, req.body);
-    if (result.affectedRows === 0) return res.status(404).json({ error: "Produk tidak ditemukan atau tidak diubah" });
-    res.json({ message: "Produk berhasil diperbarui" });
+    const updatedProduct = await updateProduct(req.params.id, req.body);
+    res.json({ message: "Produk berhasil diperbarui", product: updatedProduct });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 }
 
-// DELETE /api/products/:id
+// DELETE /api/products/:id (soft delete)
 export async function removeProduct(req, res) {
   try {
-    const result = await deleteProduct(req.params.id);
-    if (result.affectedRows === 0) return res.status(404).json({ error: "Produk tidak ditemukan" });
-    res.json({ message: "Produk berhasil dihapus" });
+    const deleted = await softDeleteProduct(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Produk tidak ditemukan" });
+    res.json({ message: "Produk berhasil dihapus (soft delete)" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -68,9 +68,9 @@ export async function removeProduct(req, res) {
 // Tambah stok
 export async function increaseStock(req, res) {
   try {
-    const { quantity, unit } = req.body;
-    const result = await addStock(req.params.id, quantity, unit);
-    if (result === 0) return res.status(404).json({ error: "Produk tidak ditemukan" });
+    const { quantity } = req.body;
+    const result = await addStock(req.params.id, quantity);
+    if (!result) return res.status(404).json({ error: "Produk tidak ditemukan" });
     res.json({ message: "Stok berhasil ditambahkan" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -80,9 +80,9 @@ export async function increaseStock(req, res) {
 // Kurangi stok (penjualan)
 export async function decreaseStock(req, res) {
   try {
-    const { quantity, unit } = req.body;
-    const result = await reduceStock(req.params.id, quantity, unit);
-    if (result === 0) return res.status(404).json({ error: "Produk tidak ditemukan atau stok tidak cukup" });
+    const { quantity } = req.body;
+    const result = await reduceStock(req.params.id, quantity);
+    if (!result) return res.status(404).json({ error: "Produk tidak ditemukan atau stok tidak cukup" });
     res.json({ message: "Stok berhasil dikurangi" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -129,6 +129,19 @@ export async function checkBarcode(req, res) {
 
     const exists = await checkDuplicateBarcode(barcode);
     res.json({ exists });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /api/products/:id/price?qty=...
+export async function getPrice(req, res) {
+  try {
+    const productId = req.params.id;
+    const quantity = parseInt(req.query.qty) || 1;
+
+    const priceData = await getProductPrice(productId, quantity);
+    res.json(priceData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
