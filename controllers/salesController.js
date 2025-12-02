@@ -5,20 +5,16 @@ import {
   getSalesReport,
 } from "../models/salesModel.js";
 
-import { insertCashflowFromSale } from "../models/cashflowModel.js"; // ✅ Tambahkan ini
-
+// Simpan penjualan + cashflow sudah di-handle di model
 export const saveSale = async (req, res) => {
   try {
     const data = req.body;
 
-    const sale = await createSale(data); // Buat penjualan
+    if (!data.items || data.items.length === 0) {
+      return res.status(400).json({ message: "Tidak ada item penjualan" });
+    }
 
-    // ✅ Catat ke cashflow
-    await insertCashflowFromSale({
-      id: sale.id,
-      total: sale.total,
-      date: sale.date,
-    });
+    const sale = await createSale(data); // Buat penjualan + update stok + cashflow
 
     res.status(201).json({
       message: "Penjualan berhasil disimpan",
@@ -62,6 +58,10 @@ export const fetchSaleById = async (req, res) => {
 export const fetchSalesReport = async (req, res) => {
   try {
     const { start, end } = req.query;
+    if (!start || !end) {
+      return res.status(400).json({ message: "Harap sertakan start dan end date" });
+    }
+
     const report = await getSalesReport(start, end);
     res.json(report);
   } catch (error) {

@@ -1,15 +1,8 @@
 import db from "../config/db.js";
-import { insertCashflowFromSale } from "./cashflowModel.js"; // ✅ Tambahkan ini
+import { insertCashflowFromSale } from "./cashflowModel.js";
 
 // Simpan penjualan + item + update stok + cashflow
-export async function createSale({
-  date,
-  items,
-  total,
-  payment,
-  change,
-  invoice_number,
-}) {
+export async function createSale({ date, items, total, payment, change, invoice_number }) {
   const connection = await db.getConnection();
 
   try {
@@ -22,47 +15,42 @@ export async function createSale({
     );
     const saleId = saleRes.insertId;
 
-    // Simpan item-item ke tabel sale_items
+    // Simpan item-item ke tabel sales_items
     const itemValues = items.map((item) => [
       saleId,
-      item.product_code,
-      item.name,
-      item.qty,
+      item.product_id,
+      item.quantity,
       item.price,
-      item.subtotal,
+      item.subtotal
     ]);
 
     await connection.query(
-      `INSERT INTO sale_items (sale_id, product_code, name, qty, price, subtotal) VALUES ?`,
+      `INSERT INTO sales_items (sale_id, product_id, quantity, price, subtotal) VALUES ?`,
       [itemValues]
     );
 
     // Update stok produk
     for (const item of items) {
       const [[product]] = await connection.query(
-        "SELECT stock, type FROM products WHERE code = ?",
-        [item.product_code]
+        "SELECT stock, type FROM products WHERE id = ?",
+        [item.product_id]
       );
 
-      if (!product) {
-        throw new Error(
-          `Produk dengan kode ${item.product_code} tidak ditemukan`
-        );
-      }
+      if (!product) throw new Error(`Produk dengan ID ${item.product_id} tidak ditemukan`);
 
       if (product.type === "barang") {
-        if (product.stock < item.qty) {
-          throw new Error(`Stok tidak cukup untuk ${item.product_code}`);
+        if (product.stock < item.quantity) {
+          throw new Error(`Stok tidak cukup untuk produk ID ${item.product_id}`);
         }
 
         await connection.query(
-          "UPDATE products SET stock = stock - ? WHERE code = ?",
-          [item.qty, item.product_code]
+          "UPDATE products SET stock = stock - ? WHERE id = ?",
+          [item.quantity, item.product_id]
         );
       }
     }
 
-    // Tambahkan cashflow (dengan proteksi duplikat di insertCashflowFromSale)
+    // Tambahkan cashflow
     await insertCashflowFromSale({
       id: saleId,
       total,
@@ -100,7 +88,10 @@ export async function getSaleById(id) {
   if (saleRows.length === 0) return null;
 
   const [itemRows] = await db.execute(
-    "SELECT * FROM sale_items WHERE sale_id = ?",
+    `SELECT si.*, p.name, p.code 
+     FROM sales_items si
+     JOIN products p ON si.product_id = p.id
+     WHERE si.sale_id = ?`,
     [id]
   );
 
@@ -112,7 +103,7 @@ export async function getSalesReport(startDate, endDate) {
   const [rows] = await db.execute(
     `SELECT s.id, s.date, s.total, COUNT(si.id) AS items
      FROM sales s
-     LEFT JOIN sale_items si ON s.id = si.sale_id
+     LEFT JOIN sales_items si ON s.id = si.sale_id
      WHERE s.date BETWEEN ? AND ?
      GROUP BY s.id
      ORDER BY s.date DESC`,
@@ -127,25 +118,22 @@ export async function getTopSellingProducts(month, year, limit = 10) {
   const validYear = year >= 2000 ? year : new Date().getFullYear();
 
   const [rows] = await db.execute(
-    `
-    SELECT 
-      si.product_code,
-      p.name,
-      SUM(si.qty) AS total_qty
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    JOIN products p ON p.code = si.product_code
-    WHERE MONTH(s.date) = ?
-      AND YEAR(s.date) = ?
-      AND p.type = 'barang'
-    GROUP BY si.product_code, p.name
-    ORDER BY total_qty DESC
-    LIMIT ?
-    `,
+    `SELECT 
+       si.product_id,
+       p.name,
+       p.code,
+       SUM(si.quantity) AS total_qty
+     FROM sales_items si
+     JOIN sales s ON s.id = si.sale_id
+     JOIN products p ON p.id = si.product_id
+     WHERE MONTH(s.date) = ?
+       AND YEAR(s.date) = ?
+       AND p.type = 'barang'
+     GROUP BY si.product_id, p.name, p.code
+     ORDER BY total_qty DESC
+     LIMIT ?`,
     [validMonth, validYear, limit]
   );
 
   return rows;
 }
-
-
