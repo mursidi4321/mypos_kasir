@@ -1,4 +1,5 @@
 import express from "express";
+import upload from "../middlewares/multerConfig.js";
 import {
   addProduct,
   getNextProductCode,
@@ -17,8 +18,8 @@ const router = express.Router();
 // Ambil semua produk aktif
 router.get("/", getProducts);
 
-// Tambah produk baru
-router.post("/", addProduct);
+// Tambah produk baru + upload gambar
+router.post("/", upload.single("image"), addProduct);
 
 // Ambil kode produk berikutnya
 router.get("/next-code", getNextProductCode);
@@ -38,8 +39,8 @@ router.get("/:id", getProduct);
 // Ambil harga produk sesuai quantity
 router.get("/:id/price", getPrice);
 
-// Update produk
-router.put("/:id", editProduct);
+// Update produk + upload gambar
+router.put("/:id", upload.single("image"), editProduct);
 
 // Soft delete produk
 router.delete("/:id", removeProduct);

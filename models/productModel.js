@@ -24,29 +24,29 @@ export async function createProduct(product) {
     code,
     barcode,
     purchase_price = 0,
-    price,
+    price = 0,
     stock = 0,
     min_stock = 0,
     type = "barang",
     wholesale_price = null,
     wholesale_min_qty = 0,
+    image_path = null
   } = product;
 
-  // Cek barcode unik
-  if (barcode) {
+  const normalizedBarcode = barcode?.trim() || null;
+
+  if (normalizedBarcode) {
     const [existing] = await db.execute(
       "SELECT id FROM products WHERE barcode = ? LIMIT 1",
-      [barcode]
+      [normalizedBarcode]
     );
     if (existing.length > 0) throw new Error("Barcode sudah digunakan");
   }
 
-  const normalizedBarcode = barcode?.trim() || null;
-
   const [result] = await db.execute(
     `INSERT INTO products
-      (name, code, barcode, purchase_price, price, stock, min_stock, type, wholesale_price, wholesale_min_qty, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      (name, code, barcode, purchase_price, price, stock, min_stock, type, wholesale_price, wholesale_min_qty, image_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
     [
       name,
       code,
@@ -58,66 +58,64 @@ export async function createProduct(product) {
       type,
       wholesale_price,
       wholesale_min_qty,
+      image_path
     ]
   );
 
-  return { id: result.insertId, ...product };
+  return {
+    id: result.insertId,
+    ...product,
+    barcode: normalizedBarcode
+  };
 }
+
+
+
 
 // Update produk berdasarkan ID
 export async function updateProduct(id, updates) {
-  const {
-    name,
-    code,
-    barcode,
-    purchase_price,
-    price,
-    stock,
-    min_stock,
-    type,
-    wholesale_price,
-    wholesale_min_qty,
-    deleted_at,
-  } = updates;
+  const normalizedBarcode = updates.barcode?.trim() || null;
 
-  const [existingProduct] = await db.execute(
-    "SELECT * FROM products WHERE id = ? LIMIT 1",
+  const [exists] = await db.execute(
+    "SELECT id FROM products WHERE id = ? LIMIT 1",
     [id]
   );
-  if (existingProduct.length === 0) throw new Error("Produk tidak ditemukan");
+  if (exists.length === 0) throw new Error("Produk tidak ditemukan");
 
-  if (barcode) {
-    const [barcodeCheck] = await db.execute(
+  if (normalizedBarcode) {
+    const [check] = await db.execute(
       "SELECT id FROM products WHERE barcode = ? AND id != ? LIMIT 1",
-      [barcode, id]
+      [normalizedBarcode, id]
     );
-    if (barcodeCheck.length > 0) throw new Error("Barcode sudah digunakan");
+    if (check.length > 0) throw new Error("Barcode sudah digunakan");
   }
 
   const fields = [];
   const values = [];
 
-  if (name !== undefined) { fields.push("name = ?"); values.push(name); }
-  if (code !== undefined) { fields.push("code = ?"); values.push(code); }
-  if (barcode !== undefined) { fields.push("barcode = ?"); values.push(barcode?.trim() || null); }
-  if (purchase_price !== undefined) { fields.push("purchase_price = ?"); values.push(purchase_price); }
-  if (price !== undefined) { fields.push("price = ?"); values.push(price); }
-  if (stock !== undefined) { fields.push("stock = ?"); values.push(stock); }
-  if (min_stock !== undefined) { fields.push("min_stock = ?"); values.push(min_stock); }
-  if (type !== undefined) { fields.push("type = ?"); values.push(type); }
-  if (wholesale_price !== undefined) { fields.push("wholesale_price = ?"); values.push(wholesale_price); }
-  if (wholesale_min_qty !== undefined) { fields.push("wholesale_min_qty = ?"); values.push(wholesale_min_qty); }
-  if (deleted_at !== undefined) { fields.push("deleted_at = ?"); values.push(deleted_at); }
-
-  if (fields.length === 0) throw new Error("Tidak ada field untuk diupdate");
+  for (const key in updates) {
+    if (updates[key] !== undefined) {
+      if (key === "barcode") {
+        fields.push("barcode = ?");
+        values.push(normalizedBarcode);
+      } else {
+        fields.push(`${key} = ?`);
+        values.push(updates[key]);
+      }
+    }
+  }
 
   values.push(id);
 
-  const query = `UPDATE products SET ${fields.join(", ")} WHERE id = ?`;
-  await db.execute(query, values);
+  await db.execute(
+    `UPDATE products SET ${fields.join(", ")} WHERE id = ?`,
+    values
+  );
 
-  return { id, ...updates };
+  return { id, ...updates, barcode: normalizedBarcode };
 }
+
+
 
 // Soft delete produk
 export async function softDeleteProduct(id) {
@@ -135,12 +133,16 @@ export async function getProductPrice(productId, quantity = 1) {
     [productId]
   );
 
-  if (rows.length === 0) throw new Error("Produk tidak ditemukan atau sudah dihapus");
+  if (rows.length === 0)
+    throw new Error("Produk tidak ditemukan atau sudah dihapus");
 
   const product = rows[0];
   let finalPrice = product.price;
 
-  if (product.wholesale_price !== null && quantity >= product.wholesale_min_qty) {
+  if (
+    product.wholesale_price !== null &&
+    quantity >= product.wholesale_min_qty
+  ) {
     finalPrice = product.wholesale_price;
   }
 
