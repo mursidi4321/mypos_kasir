@@ -1,90 +1,104 @@
 import {
   createPurchase,
-  getPurchaseReport,
+  getAllPurchases,
   getPurchaseById,
   deletePurchase,
+  getPurchaseReport,
 } from "../models/purchaseModel.js";
 
-// import { insertCashflowFromPurchase } from "../models/cashflowModel.js";
-/**
- * POST /api/purchases
- * Menyimpan pembelian baru + item pembelian + update stok
- */
-export async function createPurchaseHandler(req, res) {
-  try {
-    const { supplier, invoice, total, items } = req.body;
+// import { useAlert } from "../composables/useAlert.js"; // optional jika pakai alert di frontend
 
-    // Validasi
-    if (
-      !supplier ||
-      !invoice ||
-      !total ||
-      !Array.isArray(items) ||
-      items.length === 0
-    ) {
-      return res.status(400).json({ message: "Data pembelian tidak lengkap." });
+export const savePurchase = async (req, res) => {
+  try {
+    const { supplier, invoice_number, items } = req.body;
+
+    if (!supplier || !invoice_number || !items?.length) {
+      return res.status(400).json({ message: "Data pembelian tidak lengkap" });
     }
 
-    const id = await createPurchase(supplier, invoice, total, items);
+    // Filter item: hanya simpan yang type 'barang'
+    const validItems = items.filter((i) => i.type === "barang");
+
+    if (!validItems.length) {
+      return res
+        .status(400)
+        .json({ message: "Tidak ada produk barang yang valid" });
+    }
+
+    // Hitung total
+    const total = validItems.reduce(
+      (sum, i) => sum + (i.qty || 0) * (i.buy_price || 0),
+      0
+    );
+
+    // Simpan purchase
+    const purchaseId = await createPurchase(
+      supplier,
+      invoice_number,
+      total,
+      validItems
+    );
 
     res.status(201).json({
-      message: "✅ Pembelian berhasil disimpan",
-      purchase_id: id,
+      message: "Pembelian berhasil disimpan",
+      id: purchaseId,
     });
-  } catch (error) {
-    console.error("❌ Gagal menyimpan pembelian:", error);
-    res.status(500).json({
-      message: error.sqlMessage || error.message || "Terjadi kesalahan server",
-    });
+  } catch (err) {
+    console.error("❌ Gagal menyimpan pembelian:", err);
+    res.status(500).json({ message: err.message });
   }
-}
+};
 
-/**
- * GET /api/purchases/:id
- * Ambil data pembelian berdasarkan ID
- */
-export async function getPurchaseByIdHandler(req, res) {
+export const fetchPurchases = async (req, res) => {
   try {
-    const id = req.params.id;
+    const purchases = await getAllPurchases();
+    res.json(purchases);
+  } catch (err) {
+    console.error("❌ Gagal mengambil data pembelian:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const fetchPurchaseById = async (req, res) => {
+  try {
+    const { id } = req.params;
     const purchase = await getPurchaseById(id);
 
-    if (!purchase) {
-      return res.status(404).json({ message: "Data tidak ditemukan" });
+    if (!purchase.length) {
+      return res.status(404).json({ message: "Pembelian tidak ditemukan" });
     }
 
     res.json(purchase);
-  } catch (error) {
-    console.error("❌ Gagal mengambil data pembelian:", error);
-    res.status(500).json({ message: error.message });
+  } catch (err) {
+    console.error("❌ Gagal mengambil detail pembelian:", err);
+    res.status(500).json({ message: err.message });
   }
-}
+};
 
-/**
- * DELETE /api/purchases/:id
- * Hapus data pembelian
- */
-export async function deletePurchaseHandler(req, res) {
+export const removePurchase = async (req, res) => {
   try {
-    const id = req.params.id;
-    const result = await deletePurchase(id);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: "Data tidak ditemukan" });
-    }
-
-    res.json({ message: "🗑️ Data pembelian berhasil dihapus" });
-  } catch (error) {
-    console.error("❌ Gagal menghapus pembelian:", error);
-    res.status(500).json({ message: error.message });
+    const { id } = req.params;
+    await deletePurchase(id);
+    res.json({ message: "Pembelian berhasil dihapus" });
+  } catch (err) {
+    console.error("❌ Gagal menghapus pembelian:", err);
+    res.status(500).json({ message: err.message });
   }
-}
+};
 
-export async function getPurchaseReportHandler(req, res) {
+export const fetchPurchaseReport = async (req, res) => {
   try {
     const { start, end, supplier } = req.query;
-    const data = await getPurchaseReport(start, end, supplier);
-    res.json(data);
+    if (!start || !end) {
+      return res
+        .status(400)
+        .json({ message: "Tanggal mulai dan selesai diperlukan" });
+    }
+
+    const report = await getPurchaseReport(start, end, supplier || "all");
+    res.json(report);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("❌ Gagal mengambil laporan pembelian:", err);
+    res.status(500).json({ message: err.message });
   }
-}
+};

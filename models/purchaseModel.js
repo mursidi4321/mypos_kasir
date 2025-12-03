@@ -1,84 +1,151 @@
 // models/purchaseModel.js
 import db from "../config/db.js";
+import { insertCashflowFromPurchase } from "./cashflowModel.js";
 
-import { insertCashflowFromPurchase } from "../models/cashflowModel.js";
+export async function createPurchase(supplier, invoice_number, total, items) {
+  const connection = await db.getConnection();
 
-export async function createPurchase(supplier, invoice, total, items) {
-  const connection = await db.getConnection(); // ambil koneksi baru dari pool
   try {
     await connection.beginTransaction();
 
-    // Insert ke purchases
+    // 1. Insert ke purchases
     const [result] = await connection.execute(
-      "INSERT INTO purchases (supplier, invoice, total, created_at) VALUES (?, ?, ?, NOW())",
-      [supplier, invoice, total]
+      `INSERT INTO purchases (supplier, invoice_number, total, created_at)
+       VALUES (?, ?, ?, NOW())`,
+      [supplier, invoice_number, total]
     );
+
     const purchaseId = result.insertId;
 
-    // Insert setiap item pembelian
+    // 2. Insert purchase items
     for (const item of items) {
       await connection.execute(
-        "INSERT INTO purchase_items (purchase_id, product_id, quantity, buy_price) VALUES (?, ?, ?, ?)",
-        [purchaseId, item.product_id, item.quantity, item.buy_price]
+        `INSERT INTO purchase_items 
+          (purchase_id, product_id, name, qty, buy_price)
+         VALUES (?, ?, ?, ?, ?)`,
+        [purchaseId, item.product_id, item.name, item.qty, item.buy_price]
       );
 
-      // Update stok produk
+      // 3. Update stok
       await connection.execute(
-        "UPDATE products SET stock = stock + ? WHERE id = ?",
-        [item.quantity, item.product_id]
+        `UPDATE products SET stock = stock + ? WHERE id = ?`,
+        [item.qty, item.product_id]
       );
-
-      // tambahkan di cashflow
-      // Tambahkan cashflow (dengan proteksi duplikat di insertCashflowFromSale)
-      const date = new Date();
-      await insertCashflowFromPurchase({
-        id: purchaseId,
-        total,
-        date: date,
-        invoice_number : invoice,
-      });
     }
 
-    await connection.commit();
+    // 4. Cashflow hanya sekali
+    await insertCashflowFromPurchase({
+      id: purchaseId,
+      total,
+      date: new Date(),
+      invoice_number,
+    });
 
+    await connection.commit();
     return purchaseId;
-  } catch (error) {
+  } catch (err) {
     await connection.rollback();
-    throw error;
+    throw err;
   } finally {
-    connection.release(); // jangan lupa release koneksi ke pool
+    connection.release();
   }
 }
 
 export async function getAllPurchases() {
   const [rows] = await db.execute(
-    "SELECT * FROM purchases ORDER BY created_at DESC"
+    `SELECT id, supplier, invoice_number, total, created_at
+     FROM purchases
+     ORDER BY created_at DESC`
   );
   return rows;
 }
 
 export async function getPurchaseById(id) {
-  const [rows] = await db.execute("SELECT * FROM purchases WHERE id = ?", [id]);
-  return rows[0];
+  const [rows] = await db.execute(
+    `
+    SELECT 
+      p.id,
+      p.supplier,
+      p.invoice_number,
+      p.total,
+      p.created_at,
+      i.product_id,
+      i.qty,
+      i.buy_price,
+      pr.name AS product_name,
+      pr.code AS product_code
+    FROM purchases p
+    LEFT JOIN purchase_items i ON p.id = i.purchase_id
+    LEFT JOIN products pr ON i.product_id = pr.id
+    WHERE p.id = ?
+    `,
+    [id]
+  );
+  return rows;
 }
 
 export async function deletePurchase(id) {
-  const [result] = await db.execute("DELETE FROM purchases WHERE id = ?", [id]);
-  return result;
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // Ambil item utk rollback stok
+    const [items] = await connection.execute(
+      `SELECT product_id, qty FROM purchase_items WHERE purchase_id = ?`,
+      [id]
+    );
+
+    for (const item of items) {
+      await connection.execute(
+        `UPDATE products SET stock = stock - ? WHERE id = ?`,
+        [item.qty, item.product_id]
+      );
+    }
+
+    // Hapus item
+    await connection.execute(
+      `DELETE FROM purchase_items WHERE purchase_id = ?`,
+      [id]
+    );
+
+    // Hapus purchase
+    await connection.execute(
+      `DELETE FROM purchases WHERE id = ?`,
+      [id]
+    );
+
+    // Bersihkan cashflow
+    await connection.execute(
+      `DELETE FROM cashflow WHERE ref_type = 'purchase' AND ref_id = ?`,
+      [id]
+    );
+
+    await connection.commit();
+    return true;
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function getPurchaseReport(start, end, supplier = "all") {
-  let query = `
-    SELECT 
+  let sql = `
+    SELECT
       p.id,
-      p.created_at AS date,
+      DATE(p.created_at) as date,
       p.supplier,
-      p.invoice,
-      i.quantity,
+      p.invoice_number,
+      i.product_id,
+      pr.name AS product_name,
+      pr.code AS product_code,
+      i.qty,
       i.buy_price,
-      pr.name AS product_name
-    FROM purchase_items i
-    JOIN purchases p ON i.purchase_id = p.id
+      (i.qty * i.buy_price) AS subtotal
+    FROM purchases p
+    JOIN purchase_items i ON p.id = i.purchase_id
     JOIN products pr ON i.product_id = pr.id
     WHERE DATE(p.created_at) BETWEEN ? AND ?
   `;
@@ -86,13 +153,12 @@ export async function getPurchaseReport(start, end, supplier = "all") {
   const params = [start, end];
 
   if (supplier !== "all") {
-    query += ` AND p.supplier = ?`;
+    sql += ` AND p.supplier = ?`;
     params.push(supplier);
   }
 
-  query += ` ORDER BY p.created_at DESC`;
+  sql += ` ORDER BY p.created_at DESC`;
 
-  const [rows] = await db.execute(query, params);
+  const [rows] = await db.execute(sql, params);
   return rows;
 }
-
