@@ -1,116 +1,150 @@
 import db from "../config/db.js";
+import {
+  insertCashflow,
+  getAllCashflows,
+  getCashflowsWithSaldo,
+  getCashBalance,
+} from "../models/cashflowModel.js";
 
-// GET /api/cashflows?start=YYYY-MM-DD&end=YYYY-MM-DD
-export const getCashflows = async (req, res) => {
-  const { start, end } = req.query;
-
-  if (!start || !end) {
-    return res
-      .status(400)
-      .json({ message: "Parameter 'start' dan 'end' wajib diisi." });
-  }
-
+// Ambil daftar cashflow dengan filter tanggal
+export async function getCashflow(req, res) {
   try {
-    // Ambil data transaksi dalam rentang tanggal
-    const [rows] = await db.query(
-      `SELECT * FROM cashflows 
-       WHERE date BETWEEN ? AND ?
-       ORDER BY date ASC`,
-      [start, end]
-    );
+    const { start_date, end_date } = req.query;
 
-    // Total masuk dan keluar selama periode
-    const [[{ total_in }]] = await db.query(
-      `SELECT IFNULL(SUM(amount), 0) AS total_in 
-       FROM cashflows 
-       WHERE type = 'in' AND date BETWEEN ? AND ?`,
-      [start, end]
-    );
+    if (start_date && end_date) {
+      // Gunakan saldo_awal + item per tanggal
+      const result = await getCashflowsWithSaldo(start_date, end_date);
+      return res.json({ success: true, data: result });
+    }
 
-    const [[{ total_out }]] = await db.query(
-      `SELECT IFNULL(SUM(amount), 0) AS total_out 
-       FROM cashflows 
-       WHERE type = 'out' AND date BETWEEN ? AND ?`,
-      [start, end]
-    );
+    // Jika tidak ada filter, ambil semua cashflow
+    const items = await getAllCashflows();
 
-    // 💰 Hitung saldo awal: total masuk - keluar sebelum tanggal start
-    const [[{ saldo_in_awal }]] = await db.query(
-      `SELECT IFNULL(SUM(amount), 0) AS saldo_in_awal 
-       FROM cashflows 
-       WHERE type = 'in' AND date < ?`,
-      [start]
-    );
+    return res.json({ success: true, data: { items } });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mengambil data cashflow" });
+  }
+}
 
-    const [[{ saldo_out_awal }]] = await db.query(
-      `SELECT IFNULL(SUM(amount), 0) AS saldo_out_awal 
-       FROM cashflows 
-       WHERE type = 'out' AND date < ?`,
-      [start]
-    );
+// Ambil saldo kas total
+export async function getBalance(req, res) {
+  try {
+    const balance = await getCashBalance();
+    res.json({ success: true, data: balance });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mengambil saldo kas" });
+  }
+}
 
-    const saldo_awal = saldo_in_awal - saldo_out_awal;
-    const saldo_akhir = saldo_awal + total_in - total_out;
+// Tambah cashflow baru
+export async function addCashflow(req, res) {
+  try {
+    const { type, source, amount, description, transaction_date } = req.body;
 
-    // Kirim response lengkap
-    res.json({
-      items: rows,
-      total_in,
-      total_out,
-      saldo_awal,
-      saldo_akhir,
+    if (!type || !source || !amount || !transaction_date) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Field wajib: type, source, amount, transaction_date",
+        });
+    }
+
+    const id = await insertCashflow({
+      type,
+      source,
+      amount,
+      description,
+      transaction_date,
     });
+    res.json({ success: true, id });
   } catch (err) {
-    console.error("❌ Error in getCashflows:", err);
-    res.status(500).json({ message: "Gagal mengambil data cashflow." });
+    console.error(err);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal menambahkan cashflow" });
   }
-};
+}
 
-// POST /api/cashflows
-export const createCashflow = async (req, res) => {
-  const { date, description, type, amount, category } = req.body;
-
+// Edit cashflow
+export async function updateCashflow(req, res) {
   try {
-    const [result] = await db.query(
-      `INSERT INTO cashflows (date, description, type, amount, category) 
-       VALUES (?, ?, ?, ?, ?)`,
-      [date, description, type, amount, category]
+    const { id } = req.params;
+    const { type, source, amount, description, transaction_date } = req.body;
+
+    if (!id)
+      return res
+        .status(400)
+        .json({ success: false, message: "ID cashflow dibutuhkan" });
+
+    // Update menggunakan query manual
+    const fields = [];
+    const values = [];
+
+    if (type) {
+      fields.push("type = ?");
+      values.push(type);
+    }
+    if (source) {
+      fields.push("source = ?");
+      values.push(source);
+    }
+    if (amount !== undefined) {
+      fields.push("amount = ?");
+      values.push(amount);
+    }
+    if (description !== undefined) {
+      fields.push("description = ?");
+      values.push(description);
+    }
+    if (transaction_date) {
+      fields.push("transaction_date = ?");
+      values.push(transaction_date);
+    }
+
+    if (fields.length === 0)
+      return res
+        .status(400)
+        .json({ success: false, message: "Tidak ada field yang diupdate" });
+
+    const [result] = await db.execute(
+      `UPDATE cashflows SET ${fields.join(", ")} WHERE id = ?`,
+      [...values, id]
     );
-    res.json({
-      message: "Cashflow berhasil ditambahkan.",
-      id: result.insertId,
-    });
+
+    res.json({ success: true, affectedRows: result.affectedRows });
   } catch (err) {
-    res.status(500).json({ message: "Gagal menambahkan cashflow." });
+    console.error(err);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal mengupdate cashflow" });
   }
-};
+}
 
-// PUT /api/cashflows/:id
-export const updateCashflow = async (req, res) => {
-  const { id } = req.params;
-  const { date, description, type, amount, category } = req.body;
-
+// Hapus cashflow
+export async function deleteCashflow(req, res) {
   try {
-    await db.query(
-      `UPDATE cashflows 
-       SET date=?, description=?, type=?, amount=?, category=?
-       WHERE id=?`,
-      [date, description, type, amount, category, id]
-    );
-    res.json({ message: "Cashflow berhasil diperbarui." });
-  } catch (err) {
-    res.status(500).json({ message: "Gagal memperbarui cashflow." });
-  }
-};
+    const { id } = req.params;
+    if (!id)
+      return res
+        .status(400)
+        .json({ success: false, message: "ID cashflow dibutuhkan" });
 
-// DELETE /api/cashflows/:id
-export const deleteCashflow = async (req, res) => {
-  const { id } = req.params;
+    const [result] = await db.execute("DELETE FROM cashflows WHERE id = ?", [
+      id,
+    ]);
 
-  try {
-    await db.query(`DELETE FROM cashflows WHERE id=?`, [id]);
-    res.json({ message: "Cashflow berhasil dihapus." });
+    res.json({ success: true, affectedRows: result.affectedRows });
   } catch (err) {
-    res.status(500).json({ message: "Gagal menghapus cashflow." });
+    console.error(err);
+    res
+      .status(500)
+      .json({ success: false, message: "Gagal menghapus cashflow" });
   }
-};
+}

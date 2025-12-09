@@ -1,146 +1,137 @@
-import db from "../config/db.js";
+import db from "../config/db.js"; // pastikan koneksi MySQL
 
-// Dashboard Summary
-export const getDashboardData = async () => {
-  const [[{ sales }]] = await db.query(
-    `SELECT IFNULL(SUM(total),0) AS sales FROM sales`
-  );
-  const [[{ purchases }]] = await db.query(
-    `SELECT IFNULL(SUM(total),0) AS purchases FROM purchases`
-  );
-  const [[{ lowStock }]] = await db.query(
-    `SELECT COUNT(*) AS lowStock FROM products WHERE stock <= min_stock`
-  );
-  const profit = sales - purchases;
-  return { sales, purchases, profit, lowStock };
-};
-
-// Sales Report per date range
-export const getSalesData = async (start, end) => {
-  const [rows] = await db.query(
-    `SELECT 
-       s.id, 
-       s.date, 
-       s.invoice_number,
-       s.total, 
-       s.payment, 
-       s.change_amount,
-       COUNT(si.id) AS items
-     FROM sales s
-     LEFT JOIN sale_items si ON s.id = si.sale_id
-     WHERE DATE(s.date) BETWEEN ? AND ?
-     GROUP BY s.id
-     ORDER BY s.date DESC`,
-    [start, end]
-  );
+export const getSalesReportByDate = async (date) => {
+  const query = `
+    SELECT 
+      s.invoice_number,
+      s.date,
+      p.name AS product_name,
+      si.quantity,
+      si.price,
+      (si.quantity * si.price) AS subtotal
+    FROM sales s
+    JOIN sales_items si ON s.id = si.sale_id
+    JOIN products p ON si.product_id = p.id
+    WHERE DATE(s.date) = ?
+    ORDER BY s.date ASC
+  `;
+  const [rows] = await db.execute(query, [date]);
   return rows;
 };
 
-// Profit Loss Report per date range
-export const getProfitLossData = async (start, end) => {
-  const [[{ sales }]] = await db.query(
-    `SELECT IFNULL(SUM(total), 0) AS sales 
-     FROM sales 
-     WHERE date BETWEEN ? AND ?`,
-    [start, end]
-  );
-
-  const [[{ cost }]] = await db.query(
-    `SELECT IFNULL(SUM(p.purchase_price * sd.qty), 0) AS cost
-     FROM sale_details sd
-     JOIN products p ON sd.product_code = p.code
-     JOIN sales s ON sd.sale_id = s.id
-     WHERE s.date BETWEEN ? AND ?`,
-    [start, end]
-  );
-
-  return { sales, cost };
+export const getSalesSummaryByDate = async (date) => {
+  const query = `
+    SELECT 
+      SUM(si.quantity * si.price) AS total_sales,
+      SUM(si.quantity) AS total_qty
+    FROM sales s
+    JOIN sales_items si ON s.id = si.sale_id
+    WHERE DATE(s.date) = ?
+  `;
+  const [rows] = await db.execute(query, [date]);
+  return rows[0] || { total_sales: 0, total_qty: 0 };
 };
 
-export const getProfitLoss = async (start, end) => {
+export const getProductSalesReport = async (
+  startDate,
+  endDate,
+  productType
+) => {
+  let filterQuery = "";
+  const params = [startDate, endDate];
+
+  // Jika productType = barang / jasa
+  if (productType && productType !== "all") {
+    filterQuery = " AND p.type = ? ";
+    params.push(productType);
+  }
+
+  const query = `
+    SELECT 
+      p.id AS product_id,
+      p.name AS product_name,
+      p.type AS product_type,
+      SUM(si.quantity) AS total_qty,
+      SUM(si.subtotal) AS total_sales
+    FROM sales_items si
+    JOIN products p ON si.product_id = p.id
+    JOIN sales s ON si.sale_id = s.id
+    WHERE DATE(s.date) BETWEEN ? AND ?
+      ${filterQuery}
+    GROUP BY si.product_id
+    ORDER BY total_qty DESC
+  `;
+
+  const [rows] = await db.execute(query, params);
+
+  return rows;
+};
+
+// LAPORAN KEUNTUNGAN
+export const getProfitReport = async (startDate, endDate, type) => {
+  let filterType = "";
+  let params = [startDate, endDate];
+
+  if (type !== "all") {
+    filterType = "AND p.type = ?";
+    params.push(type);
+  }
+
+  const query = `
+    SELECT 
+      p.id AS product_id,
+      p.name AS product_name,
+      p.type AS product_type,
+      SUM(si.quantity) AS total_qty,
+      SUM(si.subtotal) AS total_omzet,
+      SUM(si.quantity * p.purchase_price) AS total_modal,
+      (SUM(si.subtotal) - SUM(si.quantity * p.purchase_price)) AS total_profit
+    FROM sales_items si
+    JOIN products p ON si.product_id = p.id
+    JOIN sales s ON si.sale_id = s.id
+    WHERE s.date BETWEEN ? AND ?
+    ${filterType}
+    GROUP BY p.id
+    ORDER BY total_profit DESC
+  `;
+
+  const [rows] = await db.execute(query, params);
+  return rows;
+};
+
+export const getTopSellingProducts = async (
+  startDate,
+  endDate,
+  limit = 10,
+  type = "all"
+) => {
+  const params = [startDate, endDate];
+
+  let typeFilter = "";
+  if (type !== "all") {
+    typeFilter = "AND p.type = ?";
+    params.push(type);
+  }
+
   const [rows] = await db.execute(
     `
     SELECT 
-      si.product_code,
-      si.name,
-      p.price,
-      p.purchase_price,
-      SUM(si.qty) AS qty,
-      SUM(si.qty * p.price) AS total_sales,
-      SUM(si.qty * p.purchase_price) AS total_cost,
-      SUM(si.qty * (p.price - p.purchase_price)) AS profit
-    FROM sale_items si
-    JOIN products p ON si.product_code = p.code
-    JOIN sales s ON si.sale_id = s.id
+      p.id AS product_id,
+      p.code,
+      p.name,
+      SUM(si.quantity) AS total_qty,
+      SUM(si.subtotal) AS total_sales
+    FROM sales s
+    JOIN sales_items si ON s.id = si.sale_id
+    JOIN products p ON p.id = si.product_id
     WHERE DATE(s.date) BETWEEN ? AND ?
-    GROUP BY si.product_code
-    ORDER BY si.name ASC
+      ${typeFilter}
+    GROUP BY p.id, p.code, p.name
+    ORDER BY total_qty DESC
+    LIMIT ${limit}
     `,
-    [start, end]
+    params
   );
 
-  let total_sales = 0;
-  let total_cost = 0;
-  let profit = 0;
-
-  for (const item of rows) {
-    total_sales += parseFloat(item.total_sales) || 0;
-    total_cost += parseFloat(item.total_cost) || 0;
-    profit += parseFloat(item.profit) || 0;
-  }
-
-  // 🔽 Ambil total biaya operasional
-  const [[{ expense }]] = await db.query(
-    `SELECT IFNULL(SUM(amount), 0) AS expense 
-     FROM expenses 
-     WHERE date BETWEEN ? AND ?`,
-    [start, end]
-  );
-
-  const net_profit = profit - parseFloat(expense);
-
-  return {
-    start,
-    end,
-    total_sales,
-    total_cost,
-    expense,
-    profit: net_profit,
-    details: rows,
-  };
-};
-
-// Purchase Report per date range
-export const getPurchaseData = async (start, end) => {
-  const [rows] = await db.query(
-    `SELECT p.id, p.date, p.supplier, p.total, COUNT(pd.id) AS items
-     FROM purchases p
-     LEFT JOIN purchase_details pd ON p.id = pd.purchase_id
-     WHERE p.date BETWEEN ? AND ?
-     GROUP BY p.id
-     ORDER BY p.date DESC`,
-    [start, end]
-  );
-  return rows;
-};
-
-// Stock Report: all products with current stock
-export const getStockData = async () => {
-  const [rows] = await db.query(
-    `SELECT id, code, name, stock, min_stock, price, purchase_price
-     FROM products
-     ORDER BY stock ASC`
-  );
-  return rows;
-};
-
-export const getLowStockProducts = async () => {
-  const [rows] = await db.query(
-    `SELECT 
-       id, code, name, stock, min_stock, price, purchase_price
-     FROM products
-     WHERE stock <= min_stock
-     ORDER BY stock ASC`
-  );
   return rows;
 };

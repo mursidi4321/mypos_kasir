@@ -1,8 +1,15 @@
 import db from "../config/db.js";
-import { insertCashflowFromSale } from "./cashflowModel.js";
+import { insertCashflow } from "./cashflowModel.js";
 
 // Simpan penjualan + item + update stok + cashflow
-export async function createSale({ date, items, total, payment, change, invoice_number }) {
+export async function createSale({
+  date,
+  items,
+  total,
+  payment,
+  change,
+  invoice_number,
+}) {
   const connection = await db.getConnection();
 
   try {
@@ -21,7 +28,7 @@ export async function createSale({ date, items, total, payment, change, invoice_
       item.product_id,
       item.quantity,
       item.price,
-      item.subtotal
+      item.subtotal,
     ]);
 
     await connection.query(
@@ -36,11 +43,14 @@ export async function createSale({ date, items, total, payment, change, invoice_
         [item.product_id]
       );
 
-      if (!product) throw new Error(`Produk dengan ID ${item.product_id} tidak ditemukan`);
+      if (!product)
+        throw new Error(`Produk dengan ID ${item.product_id} tidak ditemukan`);
 
       if (product.type === "barang") {
         if (product.stock < item.quantity) {
-          throw new Error(`Stok tidak cukup untuk produk ID ${item.product_id}`);
+          throw new Error(
+            `Stok tidak cukup untuk produk ID ${item.product_id}`
+          );
         }
 
         await connection.query(
@@ -51,11 +61,13 @@ export async function createSale({ date, items, total, payment, change, invoice_
     }
 
     // Tambahkan cashflow
-    await insertCashflowFromSale({
-      id: saleId,
-      total,
-      date,
-      invoice_number,
+    // Tambahkan cashflow otomatis untuk penjualan
+    await insertCashflow({
+      transaction_date: date,
+      type: "in",
+      source: "sales",
+      description: `Penjualan ${invoice_number}`,
+      amount: total,
     });
 
     await connection.commit();
@@ -114,7 +126,8 @@ export async function getSalesReport(startDate, endDate) {
 
 // Laporan barang terlaris (top selling)
 export async function getTopSellingProducts(month, year, limit = 10) {
-  const validMonth = month >= 1 && month <= 12 ? month : new Date().getMonth() + 1;
+  const validMonth =
+    month >= 1 && month <= 12 ? month : new Date().getMonth() + 1;
   const validYear = year >= 2000 ? year : new Date().getFullYear();
 
   const [rows] = await db.execute(

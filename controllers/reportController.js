@@ -1,120 +1,69 @@
-import {
-  getDashboardData,
-  getSalesData,
-  getProfitLossData,
-  getPurchaseData,
-  getStockData,
-} from "../models/reportModel.js";
+import * as reportModel from "../models/reportModel.js";
 
-// GET /api/reports/dashboard
-export const getDashboardReport = async (req, res) => {
+export const getDailyReport = async (req, res) => {
   try {
-    const data = await getDashboardData();
-    res.json(data);
+    const date = req.query.date; // format: YYYY-MM-DD
+    if (!date) return res.status(400).json({ error: "Date is required" });
+
+    const data = await reportModel.getSalesReportByDate(date);
+    const summary = await reportModel.getSalesSummaryByDate(date);
+
+    res.json({ data, summary });
   } catch (err) {
-    console.error("❌ Error in getDashboardReport:", err);
-    res.status(500).json({ error: "Gagal mengambil data laporan dashboard" });
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
-// GET /api/reports/sales?start=...&end=...
-export const getSalesReport = async (req, res) => {
-  const { start, end } = req.query;
-  if (!start || !end)
-    return res.status(400).json({ error: "Parameter tanggal wajib diisi" });
-
+export const getProductSalesReport = async (req, res) => {
   try {
-    const data = await getSalesData(start, end);
-    res.json(data);
-  } catch (err) {
-    console.error("❌ Error in getSalesReport:", err);
-    res.status(500).json({ error: "Gagal mengambil data penjualan" });
-  }
-};
+    const { startDate, endDate, type } = req.query; // type = all | barang | jasa
 
-// GET /api/reports/profit-loss
-export const getProfitLossReport = async (req, res) => {
-  const { start, end } = req.query;
-  const report = await getProfitLoss(start, end);
-  res.json(report);
-};
-
-// controllers/reportController.js
-import { getProfitLoss } from "../models/reportModel.js";
-
-export const profitLossReport = async (req, res) => {
-  try {
-    const start = req.query.start;
-    const end = req.query.end;
-    if (!start || !end) {
+    if (!startDate || !endDate)
       return res
         .status(400)
-        .json({ error: "Parameter start dan end diperlukan" });
-    }
+        .json({ error: "startDate and endDate are required" });
 
-    const report = await getProfitLoss(start, end);
-    res.json(report);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+    const data = await reportModel.getProductSalesReport(
+      startDate,
+      endDate,
+      type
+    );
 
-// GET /api/reports/purchases?start=...&end=...
-export const getPurchaseReport = async (req, res) => {
-  const { start, end } = req.query;
-  if (!start || !end)
-    return res.status(400).json({ error: "Parameter tanggal wajib diisi" });
-
-  try {
-    const data = await getPurchaseData(start, end);
     res.json(data);
   } catch (err) {
-    console.error("❌ Error in getPurchaseReport:", err);
-    res.status(500).json({ error: "Gagal mengambil data pembelian" });
+    console.error(err);
+    res.status(500).json({ message: "Gagal mengambil laporan per produk" });
   }
 };
 
-// GET /api/reports/stock
-export const getStockReport = async (req, res) => {
+export const getProfitReport = async (req, res) => {
   try {
-    const data = await getStockData();
-    res.json(data);
+    const { startDate, endDate, type = "all" } = req.query;
+
+    const rows = await reportModel.getProfitReport(startDate, endDate, type);
+
+    res.json({ data: rows });
   } catch (err) {
-    console.error("❌ Error in getStockReport:", err);
-    res.status(500).json({ error: "Gagal mengambil data stok" });
+    console.error(err);
+    res.status(500).json({ message: "Gagal mengambil laporan keuntungan" });
   }
 };
 
-// GET /api/reports/low-stock
-import { getLowStockProducts } from "../models/reportModel.js";
-export const getLowStockReport = async (req, res) => {
+export const getTopSellingReport = async (req, res) => {
   try {
-    const data = await getLowStockProducts();
-    res.json(data);
+    const { startDate, endDate, limit = 10, type = "all" } = req.query;
+
+    const data = await reportModel.getTopSellingProducts(
+      startDate,
+      endDate,
+      limit,
+      type
+    );
+
+    res.json({ data });
   } catch (err) {
-    console.error("❌ Error in getLowStockReport:", err);
-    res.status(500).json({ error: "Gagal mengambil data stok rendah" });
-  }
-};
-
-import {getTopSellingProducts} from '../models/salesModel.js'
-
-
-export const topSelling = async (req, res) => {
-  try {
-    const now = new Date();
-    const month = parseInt(req.query.month) || now.getMonth() + 1;
-    const year = parseInt(req.query.year) || now.getFullYear();
-
-    const data = await getTopSellingProducts(month, year);
-
-    res.json({
-      month,
-      year,
-      data,
-    });
-  } catch (err) {
-    console.error("Error laporan terlaris:", err);
-    res.status(500).json({ message: "Gagal memuat laporan" });
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
   }
 };

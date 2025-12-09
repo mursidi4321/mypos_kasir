@@ -10,8 +10,12 @@ import saleRoutes from "./routes/saleRoutes.js";
 import purchaseRoutes from "./routes/purchaseRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import cashflowRoutes from "./routes/cashflowRoutes.js";
-
+import profitRoutes from "./routes/profitRoutes.js";
+import stockReportRoutes from "./routes/stockReportRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import stockAdjustmentRoutes from "./routes/stockAdjustmentRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
+import stockRoutes from "./routes/stockRoutes.js";
 
 dotenv.config();
 
@@ -24,7 +28,7 @@ const __dirname = path.dirname(__filename);
 // Middleware
 app.use(cors());
 app.use(express.json());
-
+app.use(express.urlencoded({ extended: true }));
 // ==========================
 // SERVE STATIC UPLOAD FOLDER
 // ==========================
@@ -36,7 +40,16 @@ app.use("/api/products", productRoutes);
 app.use("/api/sales", saleRoutes);
 app.use("/api/purchases", purchaseRoutes);
 app.use("/api/reports", reportRoutes);
-app.use("/api/cashflows", cashflowRoutes);
+app.use("/api/reports/profit", profitRoutes);
+app.use("/api/stock", stockRoutes);
+
+app.use("/api/stock-adjustments", stockAdjustmentRoutes);
+
+app.use("/api/stock-report", stockReportRoutes);
+
+app.use("/api/cashflow", cashflowRoutes);
+
+app.use("/api/dashboard", dashboardRoutes);
 
 // Root endpoint
 app.get("/", (req, res) => {

@@ -1,115 +1,84 @@
 import db from "../config/db.js";
 
-
-// Ambil semua cashflow antara dua tanggal dan hitung saldo
-export const findAllCashflows = async (start, end) => {
-  const [rows] = await db.execute(
-    `SELECT * FROM cashflows 
-     WHERE date BETWEEN ? AND ?
-     ORDER BY date ASC`,
-    [start, end]
-  );
-
-  const [[{ total_in }]] = await db.execute(
-    `SELECT IFNULL(SUM(amount), 0) AS total_in 
-     FROM cashflows 
-     WHERE type = 'in' AND date BETWEEN ? AND ?`,
-    [start, end]
-  );
-
-  const [[{ total_out }]] = await db.execute(
-    `SELECT IFNULL(SUM(amount), 0) AS total_out 
-     FROM cashflows 
-     WHERE type = 'out' AND date BETWEEN ? AND ?`,
-    [start, end]
-  );
-
-  const [[{ saldo_awal }]] = await db.execute(
-    `SELECT
-       IFNULL(SUM(CASE WHEN type = 'in' THEN amount ELSE 0 END), 0) -
-       IFNULL(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS saldo_awal
-     FROM cashflows
-     WHERE date < ?`,
-    [start]
-  );
-
-  const saldo_akhir = saldo_awal + total_in - total_out;
-
-  return {
-    items: rows,
-    total_in,
-    total_out,
-    saldo_awal,
-    saldo_akhir,
-  };
-};
-
-// Tambah data cashflow manual
-export const insertCashflow = async ({
-  date,
-  description,
-  type,
-  amount,
-  category,
-}) => {
+// Tambah arus kas
+export async function insertCashflow(data) {
   const [result] = await db.execute(
-    `INSERT INTO cashflows (date, description, type, amount, category) 
+    `INSERT INTO cashflows 
+     (type, source, amount, description, transaction_date)
      VALUES (?, ?, ?, ?, ?)`,
-    [date, description, type, amount, category]
+    [
+      data.type,
+      data.source,
+      data.amount,
+      data.description,
+      data.transaction_date,
+    ]
   );
   return result.insertId;
-};
+}
 
-// Update cashflow manual
-export const updateCashflowById = async (
-  id,
-  { date, description, type, amount, category }
-) => {
-  await db.execute(
-    `UPDATE cashflows 
-     SET date = ?, description = ?, type = ?, amount = ?, category = ? 
-     WHERE id = ?`,
-    [date, description, type, amount, category, id]
-  );
-};
+// Ambil semua cashflow dengan filter tanggal opsional
+export async function getAllCashflows({ start_date, end_date } = {}) {
+  let query = "SELECT * FROM cashflows WHERE 1=1";
+  const params = [];
 
-// Hapus cashflow
-export const deleteCashflowById = async (id) => {
-  await db.execute(`DELETE FROM cashflows WHERE id = ?`, [id]);
-};
+  if (start_date) {
+    query += " AND transaction_date >= ?";
+    params.push(start_date);
+  }
+  if (end_date) {
+    query += " AND transaction_date <= ?";
+    params.push(end_date);
+  }
 
-// Tambah cashflow otomatis dari penjualan
-export const insertCashflowFromSale = async ({ id, total, date, invoice_number }) => {
-  const [[existing]] = await db.execute(
-    `SELECT id FROM cashflows 
-     WHERE related_type = 'penjualan' AND related_id = ?`,
-    [id]
-  );
+  query += " ORDER BY transaction_date DESC";
 
-  if (existing) return;
+  const [rows] = await db.execute(query, params);
 
-  await db.execute(
-    `INSERT INTO cashflows 
-      (date, description, type, amount, category, related_type, related_id)
-     VALUES (?, ?, 'in', ?, 'penjualan', 'penjualan', ?)`,
-    [date, `Penjuaan No.Nota: ${invoice_number}`, total, id]
-  );
-};
+  return rows;
+}
 
-// Tambah cashflow otomatis dari pembelian
-export const insertCashflowFromPurchase = async ({ id, total, date, invoice_number }) => {
-  const [[existing]] = await db.execute(
-    `SELECT id FROM cashflows 
-     WHERE related_type = 'pembelian' AND related_id = ?`,
-    [id]
+// Hitung saldo kas
+export async function getCashBalance() {
+  const [rows] = await db.execute(
+    `SELECT 
+       SUM(CASE WHEN type='in' THEN amount ELSE 0 END) AS total_in,
+       SUM(CASE WHEN type='out' THEN amount ELSE 0 END) AS total_out
+     FROM cashflows`
   );
 
-  if (existing) return;
+  const { total_in = 0, total_out = 0 } = rows[0];
+  return {
+    total_in: parseFloat(total_in),
+    total_out: parseFloat(total_out),
+    balance: parseFloat(total_in) - parseFloat(total_out),
+  };
+}
 
-  await db.execute(
-    `INSERT INTO cashflows 
-      (date, description, type, amount, category, related_type, related_id)
-     VALUES (?, ?, 'out', ?, 'pembelian', 'pembelian', ?)`,
-    [date, `Pembelian No.Nota: ${invoice_number}`, total, id]
+export async function getCashflowsWithSaldo(start_date, end_date) {
+  const [saldoRows] = await db.execute(
+    `SELECT
+       SUM(CASE WHEN type='in' THEN amount ELSE 0 END) -
+       SUM(CASE WHEN type='out' THEN amount ELSE 0 END) AS saldo_awal
+     FROM cashflows
+     WHERE transaction_date < ?`,
+    [start_date]
   );
-};
+  const saldo_awal = saldoRows[0]?.saldo_awal || 0;
+
+  const [items] = await db.execute(
+    `SELECT
+        id,
+        transaction_date,
+        type,
+        source,          -- KOLOM INI WAJIB
+        description,
+        amount
+     FROM cashflows
+     WHERE transaction_date BETWEEN ? AND ?
+     ORDER BY transaction_date ASC`,
+    [start_date, end_date]
+  );
+
+  return { saldo_awal, items };
+}

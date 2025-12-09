@@ -1,15 +1,17 @@
 import express from "express";
 import {
-  getCashflows,
-  createCashflow,
+  getCashflow,
+  getBalance,
+  addCashflow,
   updateCashflow,
-  deleteCashflow,
-} from "../controllers/cashflowController.js"; // ✅ sesuai nama file
+  deleteCashflow
+} from "../controllers/cashflowController.js";
 
 const router = express.Router();
 
-router.get("/", getCashflows);
-router.post("/", createCashflow);
+router.get("/", getCashflow);
+router.get("/balance", getBalance);
+router.post("/", addCashflow);
 router.put("/:id", updateCashflow);
 router.delete("/:id", deleteCashflow);
 

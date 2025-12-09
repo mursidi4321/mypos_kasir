@@ -1,6 +1,6 @@
 // models/purchaseModel.js
 import db from "../config/db.js";
-import { insertCashflowFromPurchase } from "./cashflowModel.js";
+import { insertCashflow } from "./cashflowModel.js";
 
 export async function createPurchase(supplier, invoice_number, total, items) {
   const connection = await db.getConnection();
@@ -17,7 +17,7 @@ export async function createPurchase(supplier, invoice_number, total, items) {
 
     const purchaseId = result.insertId;
 
-    // 2. Insert purchase items
+    // 2. Insert purchase items + update stok
     for (const item of items) {
       await connection.execute(
         `INSERT INTO purchase_items 
@@ -26,19 +26,29 @@ export async function createPurchase(supplier, invoice_number, total, items) {
         [purchaseId, item.product_id, item.name, item.qty, item.buy_price]
       );
 
-      // 3. Update stok
       await connection.execute(
         `UPDATE products SET stock = stock + ? WHERE id = ?`,
         [item.qty, item.product_id]
       );
     }
 
-    // 4. Cashflow hanya sekali
-    await insertCashflowFromPurchase({
-      id: purchaseId,
-      total,
-      date: new Date(),
-      invoice_number,
+    // 3. Ambil created_at dari purchase sebagai tanggal cashflow
+    const [dateRow] = await connection.execute(
+      `SELECT DATE(created_at) AS date FROM purchases WHERE id = ?`,
+      [purchaseId]
+    );
+
+    const transactionDate = dateRow[0].date;
+
+    // 4. Insert cashflow otomatis
+    await insertCashflow({
+      transaction_date: transactionDate, // ⬅ Pakai tanggal real dari purchase
+      type: "out",
+      source: "purchase",
+      description: `Pembelian #${invoice_number}`,
+      amount: total,
+      ref_id: purchaseId, // untuk menghapus cashflow otomatis
+      ref_type: "purchase",
     });
 
     await connection.commit();
@@ -62,8 +72,7 @@ export async function getAllPurchases() {
 
 export async function getPurchaseById(id) {
   const [rows] = await db.execute(
-    `
-    SELECT 
+    `SELECT 
       p.id,
       p.supplier,
       p.invoice_number,
@@ -77,8 +86,7 @@ export async function getPurchaseById(id) {
     FROM purchases p
     LEFT JOIN purchase_items i ON p.id = i.purchase_id
     LEFT JOIN products pr ON i.product_id = pr.id
-    WHERE p.id = ?
-    `,
+    WHERE p.id = ?`,
     [id]
   );
   return rows;
@@ -90,7 +98,7 @@ export async function deletePurchase(id) {
   try {
     await connection.beginTransaction();
 
-    // Ambil item utk rollback stok
+    // 1. Rollback stok
     const [items] = await connection.execute(
       `SELECT product_id, qty FROM purchase_items WHERE purchase_id = ?`,
       [id]
@@ -103,21 +111,18 @@ export async function deletePurchase(id) {
       );
     }
 
-    // Hapus item
+    // 2. Hapus purchase_items
     await connection.execute(
       `DELETE FROM purchase_items WHERE purchase_id = ?`,
       [id]
     );
 
-    // Hapus purchase
-    await connection.execute(
-      `DELETE FROM purchases WHERE id = ?`,
-      [id]
-    );
+    // 3. Hapus purchase
+    await connection.execute(`DELETE FROM purchases WHERE id = ?`, [id]);
 
-    // Bersihkan cashflow
+    // 4. Hapus cashflow terkait purchase
     await connection.execute(
-      `DELETE FROM cashflow WHERE ref_type = 'purchase' AND ref_id = ?`,
+      `DELETE FROM cashflows WHERE ref_type = 'purchase' AND ref_id = ?`,
       [id]
     );
 

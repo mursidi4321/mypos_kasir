@@ -30,7 +30,7 @@ export async function createProduct(product) {
     type = "barang",
     wholesale_price = null,
     wholesale_min_qty = 0,
-    image_path = null
+    image_path = null,
   } = product;
 
   const normalizedBarcode = barcode?.trim() || null;
@@ -58,19 +58,16 @@ export async function createProduct(product) {
       type,
       wholesale_price,
       wholesale_min_qty,
-      image_path
+      image_path,
     ]
   );
 
   return {
     id: result.insertId,
     ...product,
-    barcode: normalizedBarcode
+    barcode: normalizedBarcode,
   };
 }
-
-
-
 
 // Update produk berdasarkan ID
 export async function updateProduct(id, updates) {
@@ -114,8 +111,6 @@ export async function updateProduct(id, updates) {
 
   return { id, ...updates, barcode: normalizedBarcode };
 }
-
-
 
 // Soft delete produk
 export async function softDeleteProduct(id) {
@@ -181,12 +176,14 @@ export async function reduceStock(productId, quantity) {
   return result.affectedRows;
 }
 
-// Produk dengan stok minimum
+// Produk dengan stok minimum khusus type barang
 export async function getLowStockProducts() {
   const [rows] = await db.execute(
     `SELECT code, name, stock, min_stock, purchase_price
      FROM products
-     WHERE stock <= min_stock AND deleted_at IS NULL
+     WHERE stock <= min_stock
+       AND deleted_at IS NULL
+       AND type = 'barang'
      ORDER BY stock ASC`
   );
   return rows;
